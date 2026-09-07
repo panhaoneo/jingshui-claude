@@ -157,3 +157,34 @@ class TestEndpointParams(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDoctor(unittest.TestCase):
+    """自检命令必须报告失败而不是崩掉。"""
+
+    def test_reports_ok_when_all_probes_pass(self):
+        from jingshui.cli import cmd_doctor
+
+        c = client([ok({"item": [{"thscode": "600519.SH"}]})] * 11)
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cmd_doctor(None, client=c)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("[FAIL]", out.getvalue())
+
+    def test_reports_failures_without_raising(self):
+        from jingshui.cli import cmd_doctor
+
+        c = client([err(2003, "无权限")] * 11)
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cmd_doctor(None, client=c)
+        self.assertEqual(rc, 1)
+        self.assertIn("code=2003", out.getvalue())
+
+    def test_network_error_is_reported_as_unreachable(self):
+        from jingshui.cli import cmd_doctor
+
+        c = client([urllib.error.URLError("Tunnel connection failed: 403 Forbidden")] * 33)
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cmd_doctor(None, client=c)
+        self.assertEqual(rc, 1)
+        self.assertIn("网络不可达", out.getvalue())

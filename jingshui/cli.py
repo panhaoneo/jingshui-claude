@@ -4,6 +4,7 @@
     python -m jingshui sectors     # L1 行业景气排名
     python -m jingshui scan        # L0->L3 全流程, 结果落盘
     python -m jingshui explain     # 打印框架规则速查表
+    python -m jingshui doctor      # 逐个探测端点可用性
 
 需要环境变量 HITHINK_FINANCE_API_KEY (explain 子命令除外)。
 """
@@ -110,6 +111,70 @@ L3 买点与仓位
     return 0
 
 
+
+def cmd_doctor(args, client=None) -> int:
+    """逐个探测框架依赖的端点, 报告哪些可用。
+
+    在受限网络里跑不通全流程时, 用它区分三种情况:
+    Key 没配 / 域名被网络策略拦截 / 某个端点权限或参数有问题。
+    """
+    import urllib.error
+
+    from .client import HithinkClient, HithinkError
+
+    if client is None:
+        try:
+            # 自检不重试: 目的是快速看清失败原因, 不是把请求做成功
+            client = HithinkClient(max_retries=0)
+        except MissingApiKey as exc:
+            print(f"[FAIL] API Key: {exc}")
+            return 2
+        print("[ OK ] API Key: 已加载 (来源: 环境变量或用户级凭据文件)")
+
+    end = int(__import__("time").time() * 1000)
+    start = end - 400 * 86_400_000
+
+    probes = [
+        ("标的检索", lambda: client.search_ticker("600519", limit=1)),
+        ("行情快照", lambda: client.price_snapshot(["600519.SH"])),
+        ("个股日线", lambda: client.price_history("600519.SH", start, end)),
+        ("季度利润表", lambda: client.income_statements("600519.SH", "quarterly", 8)),
+        ("年度利润表", lambda: client.income_statements("600519.SH", "annual", 5)),
+        ("年度资产负债表", lambda: client.balance_sheets("600519.SH", "annual", 5)),
+        ("行业指数目录", lambda: client.index_catalog("industry")),
+        ("指数日线", lambda: client.index_history("000300.SH", start, end)),
+        ("指数成分股", lambda: client.index_constituents("000300.SH")),
+        ("估值快照", lambda: client.valuations(["600519.SH"])),
+        ("龙虎榜机构榜", lambda: client.dragon_tiger("org")),
+    ]
+
+    failures = 0
+    for label, call in probes:
+        try:
+            result = call()
+        except HithinkError as exc:
+            failures += 1
+            print(f"[FAIL] {label}: 上游返回 code={exc.code} {exc.message}")
+        except urllib.error.URLError as exc:
+            failures += 1
+            print(f"[FAIL] {label}: 网络不可达 ({exc.reason})")
+        except Exception as exc:  # noqa: BLE001 - 自检要报告而不是崩掉
+            failures += 1
+            print(f"[FAIL] {label}: {type(exc).__name__}: {exc}")
+        else:
+            size = len(result) if isinstance(result, (list, dict)) else 1
+            print(f"[ OK ] {label}: 返回 {size} 条")
+
+    print()
+    if failures:
+        print(f"{len(probes) - failures}/{len(probes)} 个端点可用。")
+        print("全部失败且提示网络不可达 -> 域名被网络策略拦截, 换一台能直连的机器。")
+        print("个别失败且 code 为 2003 -> 该能力未授权; code 为 1xxx -> 参数问题。")
+        return 1
+    print(f"全部 {len(probes)} 个端点可用, 可以直接跑 python -m jingshui scan。")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="jingshui", description="景气 α 趋势跟随系统")
     p.add_argument("--lookback", type=int, default=500, help="回看的自然日天数")
@@ -130,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("sectors", help="L1 行业景气排名").set_defaults(func=cmd_sectors)
     sub.add_parser("scan", help="L0->L3 全流程").set_defaults(func=cmd_scan)
     sub.add_parser("explain", help="打印规则速查表").set_defaults(func=cmd_explain)
+    sub.add_parser("doctor", help="逐个探测端点可用性").set_defaults(func=cmd_doctor)
     return p
 
 

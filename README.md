@@ -46,6 +46,7 @@ L3  买点与仓位        回调后确认起涨、分批、止损
 export HITHINK_FINANCE_API_KEY=<你的 key>     # 申请: https://fuyao.aicubes.cn/admin/
 
 python -m jingshui explain          # 打印规则速查表, 不需要 API Key
+python -m jingshui doctor           # 逐个探测 11 个端点的可用性
 python -m jingshui market           # L0 大盘闸门
 python -m jingshui sectors          # L1 行业景气排名
 python -m jingshui scan             # L0->L3 全流程, 结果写入 output/
@@ -89,11 +90,22 @@ jingshui/
 python -m unittest discover -s tests -t .
 ```
 
-121 个用例，覆盖三类容易出错的地方：
+124 个用例，覆盖三类容易出错的地方：
 
 - **A 股财报口径**：累计口径单季化、同比必须对去年同季、负基数不可比、时点纪律（用披露日而非报告期末判断可见性）。
 - **接口契约**：`code != 0` 必须报错、`data` 为 `null` 不能当空结果、可修复错误不重试、限流退避重试、Key 不进 URL。
 - **规则边界**：绝不向下加仓、止损基准是每一批而非均价、3 周涨 20% 触发 8 周锁定、止损优先于锁定期、组合上限与禁止杠杆。
+
+## 先跑 doctor
+
+`doctor` 逐个探测框架依赖的 11 个端点，用来区分三种失败：
+
+| 输出 | 含义 |
+|---|---|
+| `[FAIL] API Key: 未找到` | Key 没配 |
+| 全部 `网络不可达` | 域名被网络策略或防火墙拦截，换一台能直连 `fuyao.aicubes.cn` 的机器 |
+| 个别 `code=2003` | 该能力未授权 |
+| 个别 `code=1xxx` | 参数问题 |
 
 ## 已知限制
 
