@@ -155,6 +155,7 @@ def cmd_doctor(args, client=None) -> int:
     failures = 0
     throttled = 0
     unreachable = 0
+    seen_codes: set[int] = set()
     for i, (label, call) in enumerate(probes):
         if i and pause:
             # 逐个探测本身就可能撞上限流, 主动放慢比事后解释更省事
@@ -163,6 +164,7 @@ def cmd_doctor(args, client=None) -> int:
             result = call()
         except HithinkError as exc:
             failures += 1
+            seen_codes.add(exc.code)
             if exc.code == 4001:
                 throttled += 1
             print(f"[FAIL] {label}: 上游返回 code={exc.code} {exc.message}")
@@ -193,15 +195,31 @@ def cmd_doctor(args, client=None) -> int:
         return 0
 
     print(f"{len(probes) - failures}/{len(probes)} 个端点可用。")
+
+    # 只解释真正出现过的失败。无条件打印一串"可能的原因"会被当成结论,
+    # 让人以为遇到了根本没发生的错误。
     if throttled:
+        nxt = max(pause * 3, 3)
         print(
-            f"其中 {throttled} 个是限流 (HTTP 429 或 code=4001), 不是端点不可用。"
-            f"\n  重试: python -m jingshui doctor --pause {max(pause * 3, 3):.0f}"
-            "\n  跑全流程时同样要放慢: python -m jingshui scan --request-pause 1.0"
+            f"\n{throttled} 个是限流 (HTTP 429 或 code=4001), 不是端点不可用。"
+            "\n客户端撞到限流会自动把请求间隔翻倍, 但突发配额下仍可能失败, 把起始间隔调大:"
+            f"\n  python -m jingshui doctor --pause {nxt:.0f}"
+            f"\n  python -m jingshui scan --request-pause {nxt:.0f} --org-flow-days 20"
         )
-    if unreachable == len(probes):
-        print("全部是网络不可达 -> 域名被网络策略或防火墙拦截, 换一台能直连的机器。")
-    print("code=2003 -> 该能力未授权; code=1xxx -> 参数问题。")
+    if unreachable:
+        if unreachable == len(probes):
+            print("\n全部是网络不可达 -> 域名被网络策略或防火墙拦截, 换一台能直连的机器。")
+        else:
+            print(f"\n{unreachable} 个网络不可达, 可能是瞬时抖动, 重跑一次看是否复现。")
+    if 2003 in seen_codes:
+        print("\ncode=2003 -> 这个 API Key 没有该能力的权限, 去 https://fuyao.aicubes.cn/admin/ 查授权范围。")
+    param_codes = sorted(c for c in seen_codes if 1000 <= c < 2000)
+    if param_codes:
+        codes = ", ".join(str(c) for c in param_codes)
+        print(f"\ncode={codes} -> 参数问题, 属于代码 bug, 请把上面这段输出贴回来。")
+    other = sorted(seen_codes - {2003, 4001} - set(param_codes))
+    if other:
+        print(f"\n其他业务错误码: {', '.join(str(c) for c in other)}")
     return 1
 
 

@@ -225,7 +225,9 @@ class TestHttpStatusErrors(unittest.TestCase):
         c = client([http_error(429, retry_after=7), ok({"item": []})])
         with mock.patch("time.sleep") as slept:
             c.price_snapshot(["600519.SH"])
-        self.assertEqual(slept.call_args[0][0], 7.0)
+        # 限流后还会有一次自适应节流的等待, 所以查全部 sleep 而不是最后一次
+        waits = [call[0][0] for call in slept.call_args_list]
+        self.assertIn(7.0, waits)
 
     def test_retry_after_http_date_falls_back_to_backoff(self):
         c = client([http_error(429, retry_after="Wed, 21 Oct 2026 07:28:00 GMT"), ok({"item": []})])
@@ -296,3 +298,132 @@ class TestDoctorThrottling(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("鉴权或访问策略拒绝", text)
         self.assertNotIn("--pause", text)
+
+
+class TestAdaptiveThrottle(unittest.TestCase):
+    """固定间隔挡不住突发配额, 撞一次就该自动降速。"""
+
+    def test_interval_starts_at_configured_base(self):
+        c = HithinkClient(api_key="k", opener=FakeOpener([]), min_interval=0.25)
+        self.assertEqual(c.current_interval, 0.25)
+
+    def test_rate_limit_widens_interval(self):
+        c = client([http_error(429), ok({"item": []})])
+        before = c.current_interval
+        with mock.patch("time.sleep"):
+            c.price_snapshot(["600519.SH"])
+        self.assertGreater(c.current_interval, before)
+
+    def test_business_rate_limit_code_also_widens(self):
+        c = client([err(4001), ok({"item": []})])
+        with mock.patch("time.sleep"):
+            c.price_snapshot(["600519.SH"])
+        self.assertGreaterEqual(c.current_interval, 0.5)
+
+    def test_interval_capped(self):
+        c = HithinkClient(
+            api_key="k",
+            opener=FakeOpener([http_error(429)] * 60),
+            max_retries=0,
+            min_interval=0.1,
+            max_interval=2.0,
+        )
+        for _ in range(20):
+            with mock.patch("time.sleep"), self.assertRaises(HttpStatusError):
+                c.price_snapshot(["600519.SH"])
+        self.assertLessEqual(c.current_interval, 2.0)
+
+    def test_interval_decays_after_sustained_success(self):
+        script = [http_error(429)] + [ok({"item": []})] * 40
+        c = HithinkClient(api_key="k", opener=FakeOpener(script), min_interval=0.1)
+        with mock.patch("time.sleep"):
+            c.price_snapshot(["600519.SH"])
+            widened = c.current_interval
+            for _ in range(30):
+                c.price_snapshot(["600519.SH"])
+        self.assertLess(c.current_interval, widened)
+        self.assertGreaterEqual(c.current_interval, 0.1)
+
+    def test_never_decays_below_configured_base(self):
+        script = [http_error(429)] + [ok({"item": []})] * 100
+        c = HithinkClient(api_key="k", opener=FakeOpener(script), min_interval=0.4)
+        with mock.patch("time.sleep"):
+            c.price_snapshot(["600519.SH"])
+            for _ in range(90):
+                c.price_snapshot(["600519.SH"])
+        self.assertGreaterEqual(c.current_interval, 0.4)
+
+    def test_set_min_interval_raises_floor(self):
+        c = HithinkClient(api_key="k", opener=FakeOpener([]), min_interval=0.1)
+        c.set_min_interval(1.5)
+        self.assertGreaterEqual(c.current_interval, 1.5)
+
+    def test_zero_interval_never_sleeps_for_throttling(self):
+        c = HithinkClient(api_key="k", opener=FakeOpener([ok({"item": []})] * 3))
+        with mock.patch("time.sleep") as slept:
+            for _ in range(3):
+                c.price_snapshot(["600519.SH"])
+        self.assertFalse(slept.called)
+
+
+class TestDoctorHintsAreEvidenceBased(unittest.TestCase):
+    """只解释真正出现过的失败。
+
+    这是一个被用户实际误读过的 bug: 无条件打印"code=2003 该能力未授权,
+    code=1xxx 参数问题"会被当成结论, 让人以为遇到了根本没发生的错误。
+    """
+
+    def _run(self, script):
+        from jingshui.cli import cmd_doctor
+
+        c = client(script * 40)
+        c.max_retries = 0
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            cmd_doctor(None, client=c)
+        return out.getvalue()
+
+    def test_throttling_alone_does_not_mention_2003_or_params(self):
+        text = self._run([http_error(429)])
+        self.assertIn("限流", text)
+        self.assertNotIn("2003", text)
+        self.assertNotIn("参数问题", text)
+
+    def test_unreachable_alone_does_not_mention_business_codes(self):
+        text = self._run([urllib.error.URLError("boom")])
+        self.assertIn("网络不可达", text)
+        self.assertNotIn("2003", text)
+        self.assertNotIn("参数问题", text)
+
+    def test_2003_hint_only_when_2003_observed(self):
+        text = self._run([err(2003, "无权限")])
+        self.assertIn("2003", text)
+        self.assertIn("授权范围", text)
+        self.assertNotIn("参数问题", text)
+
+    def test_param_error_hint_only_when_1xxx_observed(self):
+        text = self._run([err(1002, "参数格式无效")])
+        self.assertIn("code=1002", text)
+        self.assertIn("参数问题", text)
+        self.assertNotIn("授权范围", text)
+
+    def test_partial_unreachable_suggests_retry_not_firewall(self):
+        from jingshui.cli import cmd_doctor
+
+        script = [urllib.error.URLError("boom")] + [ok({"item": []})] * 39
+        c = client(script)
+        c.max_retries = 0
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            cmd_doctor(None, client=c)
+        text = out.getvalue()
+        self.assertIn("重跑一次看是否复现", text)
+        self.assertNotIn("域名被网络策略", text)
+
+    def test_all_pass_prints_no_hints(self):
+        text = self._run([ok({"item": []})])
+        self.assertIn("全部 11 个端点可用", text)
+        for noise in ("2003", "参数问题", "限流", "网络不可达"):
+            self.assertNotIn(noise, text)
+
+    def test_unknown_code_is_surfaced_not_swallowed(self):
+        text = self._run([err(9999, "未知")])
+        self.assertIn("9999", text)

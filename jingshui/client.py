@@ -31,6 +31,7 @@ API_KEY_ENV = "HITHINK_FINANCE_API_KEY"
 CALLER_FIXABLE = {1001, 1002, 1003, 1004, 2001, 2003, 3001, 3004}
 RETRYABLE = {4001, 5001, 5002, 5003}
 NOT_READY = 3002
+RATE_LIMITED = 4001
 
 
 class HithinkError(RuntimeError):
@@ -122,13 +123,53 @@ class HithinkClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         opener: Any = None,
+        min_interval: float = 0.0,
+        max_interval: float = 8.0,
     ) -> None:
         self._api_key = load_api_key(api_key)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
+        # 自适应节流: 撞一次限流就把间隔翻倍, 连续成功后再慢慢收回。
+        # 固定间隔挡不住突发配额 —— 第一次撞上之后就该自己降速, 而不是
+        # 让后面每个请求都去撞一遍。
+        self._base_interval = max(0.0, min_interval)
+        self._interval = self._base_interval
+        self._max_interval = max(max_interval, self._base_interval)
+        self._last_sent = 0.0
+        self._consecutive_ok = 0
         # opener 可注入, 便于测试时替换传输层。
         self._opener = opener or urllib.request.build_opener()
+
+    # ---------- 节流 ----------
+
+    @property
+    def current_interval(self) -> float:
+        """当前实际生效的请求间隔, 会随限流自动放大。"""
+        return self._interval
+
+    def set_min_interval(self, seconds: float) -> None:
+        self._base_interval = max(0.0, seconds)
+        self._interval = max(self._interval, self._base_interval)
+        self._max_interval = max(self._max_interval, self._base_interval)
+
+    def _throttle(self) -> None:
+        if self._interval <= 0:
+            return
+        wait = self._last_sent + self._interval - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+
+    def _note_rate_limited(self) -> None:
+        self._interval = min(max(self._interval * 2.0, 0.5), self._max_interval)
+        self._consecutive_ok = 0
+        LOG.debug("rate limited, interval widened to %.2fs", self._interval)
+
+    def _note_success(self) -> None:
+        self._consecutive_ok += 1
+        if self._consecutive_ok >= 10 and self._interval > self._base_interval:
+            self._interval = max(self._base_interval, self._interval * 0.7)
+            self._consecutive_ok = 0
 
     # ---------- 传输层 ----------
 
@@ -171,10 +212,14 @@ class HithinkClient:
         """
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
+            self._throttle()
+            self._last_sent = time.monotonic()
             try:
                 envelope = self._raw_get(path, params)
             except HttpStatusError as exc:
                 last_exc = exc
+                if exc.status == 429:
+                    self._note_rate_limited()
                 if not exc.retryable or attempt >= self.max_retries:
                     raise
                 self._sleep(attempt, exc.retry_after)
@@ -188,6 +233,7 @@ class HithinkClient:
 
             code = envelope.get("code")
             if code == 0:
+                self._note_success()
                 return envelope.get("data")
 
             err = HithinkError(
@@ -195,6 +241,8 @@ class HithinkClient:
                 str(envelope.get("message", "")),
                 envelope.get("request_id"),
             )
+            if err.code == RATE_LIMITED:
+                self._note_rate_limited()
             if err.code in CALLER_FIXABLE or err.code == NOT_READY:
                 # 调用方可修复的错误和"数据尚未准备"都不该无脑重试。
                 raise err

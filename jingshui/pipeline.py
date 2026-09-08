@@ -90,12 +90,12 @@ class Pipeline:
         self.client = client
         self.config = config or ScanConfig()
         self.cache = Cache(self.config.cache_dir, self.config.cache_ttl)
+        # 节流统一交给 client: 它能在撞到限流时自动放大间隔, 也覆盖重试请求,
+        # 而 pipeline 自己 sleep 只能覆盖首次调用。
+        if hasattr(client, "set_min_interval"):
+            client.set_min_interval(self.config.request_pause)
 
     # ---------- 工具 ----------
-
-    def _pause(self) -> None:
-        if self.config.request_pause:
-            time.sleep(self.config.request_pause)
 
     def _window(self) -> tuple[int, int]:
         end = now_ms()
@@ -113,7 +113,6 @@ class Pipeline:
             if rows is None:
                 rows = self.client.index_history(code, start, end)
                 self.cache.put(key, rows)
-                self._pause()
             bars[code] = to_bars(rows)
         return judge_market(bars, indexes)
 
@@ -125,7 +124,6 @@ class Pipeline:
         if catalog is None:
             catalog = self.client.index_catalog(self.config.sector_tag)
             self.cache.put(catalog_key, catalog)
-            self._pause()
 
         names = {row["thscode"]: row.get("name", row["thscode"]) for row in catalog}
         start, end = self._window()
@@ -140,7 +138,6 @@ class Pipeline:
                     LOG.warning("板块 %s 行情不可用: %s", code, exc)
                     continue
                 self.cache.put(key, rows)
-                self._pause()
             if rows:
                 bars[code] = to_bars(rows)
         return score_sectors(bars, names)
@@ -162,7 +159,6 @@ class Pipeline:
             start, end = self._window()
             rows = self.client.price_history(thscode, start, end, adjust="forward")
             self.cache.put(key, rows)
-            self._pause()
         return to_bars(rows)
 
     def _financials(self, thscode: str) -> tuple[list[dict], list[dict], list[dict]]:
@@ -171,11 +167,8 @@ class Pipeline:
         if cached is not None:
             return cached["quarterly"], cached["annual"], cached["balance"]
         quarterly = self.client.income_statements(thscode, "quarterly", 12)
-        self._pause()
         annual = self.client.income_statements(thscode, "annual", 5)
-        self._pause()
         balance = self.client.balance_sheets(thscode, "annual", 5)
-        self._pause()
         self.cache.put(
             key, {"quarterly": quarterly, "annual": annual, "balance": balance}
         )
@@ -200,7 +193,6 @@ class Pipeline:
                     LOG.debug("龙虎榜 %s 不可用: %s", day, exc)
                     payload = {}
                 self.cache.put(key, payload)
-                self._pause()
             for row in (payload or {}).get("stock_items") or []:
                 code = row.get("thscode")
                 val = row.get("org_net_value")
@@ -232,7 +224,6 @@ class Pipeline:
             if rows is None:
                 rows = self.client.index_constituents(sec.thscode)
                 self.cache.put(key, rows)
-                self._pause()
             codes = [r["thscode"] for r in rows][: self.config.max_stocks_per_sector]
             members[sec.thscode] = codes
             for c in codes:
@@ -259,7 +250,6 @@ class Pipeline:
             if ref_rows is None:
                 ref_rows = self.client.index_constituents(ref)
                 self.cache.put(ref_key, ref_rows)
-                self._pause()
             for row in ref_rows:
                 code = row["thscode"]
                 if code in returns_250:

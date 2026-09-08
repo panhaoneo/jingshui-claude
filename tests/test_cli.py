@@ -43,7 +43,8 @@ class TestParser(unittest.TestCase):
         self.assertIsNone(args.rs_reference)
 
     def test_subcommand_required(self):
-        with self.assertRaises(SystemExit):
+        # argparse 会把用法写到 stderr, 屏蔽掉以免污染测试输出
+        with mock.patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit):
             self.parse([])
 
     def test_all_subcommands_registered(self):
