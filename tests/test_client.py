@@ -7,9 +7,22 @@ from unittest import mock
 from jingshui.client import (
     HithinkClient,
     HithinkError,
+    HttpStatusError,
     MissingApiKey,
     load_api_key,
 )
+
+
+def http_error(status, reason="Too Many Requests", body="", retry_after=None):
+    """构造一个真实形状的 urllib HTTPError。"""
+    import email.message
+
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return urllib.error.HTTPError(
+        "https://fuyao.aicubes.cn/x", status, reason, headers, io.BytesIO(body.encode())
+    )
 
 
 class FakeResponse(io.BytesIO):
@@ -188,3 +201,98 @@ class TestDoctor(unittest.TestCase):
             rc = cmd_doctor(None, client=c)
         self.assertEqual(rc, 1)
         self.assertIn("网络不可达", out.getvalue())
+
+
+class TestHttpStatusErrors(unittest.TestCase):
+    """HTTP 层的失败不能被误报成"网络不可达"。"""
+
+    def test_429_is_not_reported_as_unreachable(self):
+        c = client([http_error(429)])
+        c.max_retries = 0
+        with self.assertRaises(HttpStatusError) as ctx:
+            c.price_snapshot(["600519.SH"])
+        self.assertEqual(ctx.exception.status, 429)
+        self.assertTrue(ctx.exception.retryable)
+
+    def test_429_is_retried_then_succeeds(self):
+        c = client([http_error(429), ok({"item": [{"thscode": "600519.SH"}]})])
+        with mock.patch("time.sleep") as slept:
+            rows = c.price_snapshot(["600519.SH"])
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(slept.called)
+
+    def test_retry_after_header_is_honoured(self):
+        c = client([http_error(429, retry_after=7), ok({"item": []})])
+        with mock.patch("time.sleep") as slept:
+            c.price_snapshot(["600519.SH"])
+        self.assertEqual(slept.call_args[0][0], 7.0)
+
+    def test_retry_after_http_date_falls_back_to_backoff(self):
+        c = client([http_error(429, retry_after="Wed, 21 Oct 2026 07:28:00 GMT"), ok({"item": []})])
+        with mock.patch("time.sleep") as slept:
+            c.price_snapshot(["600519.SH"])
+        self.assertGreater(slept.call_args[0][0], 0.0)
+
+    def test_403_is_not_retried(self):
+        c = client([http_error(403, "Forbidden")])
+        with self.assertRaises(HttpStatusError) as ctx:
+            c.price_snapshot(["600519.SH"])
+        self.assertEqual(ctx.exception.status, 403)
+        self.assertFalse(ctx.exception.retryable)
+        self.assertEqual(len(c._opener.requests), 1)
+
+    def test_500_is_retried(self):
+        c = client([http_error(500, "Server Error"), ok({"item": []})])
+        with mock.patch("time.sleep"):
+            self.assertEqual(c.price_snapshot(["600519.SH"]), [])
+
+    def test_envelope_in_non_2xx_body_is_still_parsed(self):
+        # 有些网关在 429 上仍带回业务信封, 应按 code 处理而不是当成 HTTP 错误
+        body = json.dumps(err(4001, "限流"))
+        c = client([http_error(429, body=body), ok({"item": []})])
+        with mock.patch("time.sleep"):
+            self.assertEqual(c.price_snapshot(["600519.SH"]), [])
+
+    def test_body_is_captured_for_diagnosis(self):
+        c = client([http_error(429, body="rate limit exceeded")])
+        c.max_retries = 0
+        with self.assertRaises(HttpStatusError) as ctx:
+            c.price_snapshot(["600519.SH"])
+        self.assertIn("rate limit exceeded", str(ctx.exception))
+
+
+class TestDoctorThrottling(unittest.TestCase):
+    def test_429_reported_as_throttling_not_unreachable(self):
+        from jingshui.cli import cmd_doctor
+
+        c = client([http_error(429)] * 40)
+        c.max_retries = 0
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cmd_doctor(None, client=c)
+        text = out.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("HTTP 429", text)
+        self.assertIn("限流", text)
+        self.assertNotIn("网络不可达", text)
+        self.assertIn("--pause", text)
+
+    def test_business_rate_limit_code_also_counted_as_throttling(self):
+        from jingshui.cli import cmd_doctor
+
+        c = client([err(4001, "限流")] * 40)
+        c.max_retries = 0
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            rc = cmd_doctor(None, client=c)
+        self.assertEqual(rc, 1)
+        self.assertIn("限流", out.getvalue())
+
+    def test_403_reported_as_auth_not_throttling(self):
+        from jingshui.cli import cmd_doctor
+
+        c = client([http_error(403, "Forbidden")] * 40)
+        c.max_retries = 0
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            cmd_doctor(None, client=c)
+        text = out.getvalue()
+        self.assertIn("鉴权或访问策略拒绝", text)
+        self.assertNotIn("--pause", text)

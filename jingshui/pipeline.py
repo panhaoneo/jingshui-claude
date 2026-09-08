@@ -79,6 +79,7 @@ class ScanConfig:
     require_sector_new_high: bool = True
     max_stocks_per_sector: int = 40
     rs_reference_index: str | None = None  # 见 stock_scan 里对 RS 样本总体的说明
+    org_flow_days: int = 60   # 龙虎榜回溯天数, 每天一次请求, 限流时可调小
     cache_dir: str = ".cache/jingshui"
     cache_ttl: int = 12 * 3600
     request_pause: float = 0.15       # 每次请求之间的最小间隔, 降低触发限流的概率
@@ -352,7 +353,7 @@ class Pipeline:
             _dump(os.path.join(out_dir, "summary.json"), summary)
             return summary
 
-        org_net = self.org_flows()
+        org_net = self.org_flows(self.config.org_flow_days)
         scores, sector_of = self.stock_scan(leaders, org_net)
         candidates = rank_candidates(scores)
         _dump(

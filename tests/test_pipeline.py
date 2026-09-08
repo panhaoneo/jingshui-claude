@@ -214,3 +214,31 @@ class TestTimeHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRequestBudget(unittest.TestCase):
+    """限流环境下要能把请求量调下来。"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _pipe(self, **cfg):
+        client = FakeClient()
+        config = ScanConfig(cache_dir=os.path.join(self.dir, "c"), request_pause=0.0, **cfg)
+        return Pipeline(client, config), client
+
+    def test_org_flow_days_controls_request_count(self):
+        pipe, client = self._pipe(org_flow_days=5)
+        pipe.org_flows(pipe.config.org_flow_days)
+        self.assertEqual(client.calls["dragon_tiger"], 5)
+
+    def test_run_honours_configured_org_flow_days(self):
+        pipe, client = self._pipe(org_flow_days=3)
+        pipe.run(out_dir=os.path.join(self.dir, "out"))
+        self.assertEqual(client.calls["dragon_tiger"], 3)
+
+    def test_default_org_flow_days_matches_framework_doc(self):
+        self.assertEqual(ScanConfig().org_flow_days, 60)

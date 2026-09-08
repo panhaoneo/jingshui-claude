@@ -90,7 +90,7 @@ jingshui/
 python -m unittest discover -s tests -t .
 ```
 
-124 个用例，覆盖三类容易出错的地方：
+147 个用例，覆盖三类容易出错的地方：
 
 - **A 股财报口径**：累计口径单季化、同比必须对去年同季、负基数不可比、时点纪律（用披露日而非报告期末判断可见性）。
 - **接口契约**：`code != 0` 必须报错、`data` 为 `null` 不能当空结果、可修复错误不重试、限流退避重试、Key 不进 URL。
@@ -100,12 +100,26 @@ python -m unittest discover -s tests -t .
 
 `doctor` 逐个探测框架依赖的 11 个端点，用来区分三种失败：
 
-| 输出 | 含义 |
-|---|---|
-| `[FAIL] API Key: 未找到` | Key 没配 |
-| 全部 `网络不可达` | 域名被网络策略或防火墙拦截，换一台能直连 `fuyao.aicubes.cn` 的机器 |
-| 个别 `code=2003` | 该能力未授权 |
-| 个别 `code=1xxx` | 参数问题 |
+| 输出 | 含义 | 怎么办 |
+|---|---|---|
+| `[FAIL] API Key: 未找到` | Key 没配 | 设置 `HITHINK_FINANCE_API_KEY` |
+| `HTTP 429 ... 限流` | 请求太密，**不是端点不可用** | `--pause` 调大重试 |
+| `HTTP 401/403` | 鉴权或访问策略拒绝 | 检查 Key 是否有效 |
+| 全部 `网络不可达` | 域名被网络策略或防火墙拦截 | 换一台能直连 `fuyao.aicubes.cn` 的机器 |
+| `code=2003` | 该能力未授权 | 看 Key 的权限范围 |
+| `code=1xxx` | 参数问题 | 贴出来，需要改代码 |
+
+## 撞到限流怎么办
+
+上游有频率限制。客户端已经会对 `HTTP 429` 和业务码 `4001` 做指数退避重试，并优先遵守响应头里的 `Retry-After`。仍然撞限流时，把节流参数调大：
+
+```bash
+python -m jingshui doctor --pause 3            # 探测之间隔 3 秒
+python -m jingshui scan --request-pause 1.0    # 每次请求之间隔 1 秒
+python -m jingshui scan --org-flow-days 20     # 龙虎榜从 60 天缩到 20 天, 少发 40 次请求
+```
+
+请求量的大头依次是：板块日线（每个板块 1 次，`industry` 约 90 个）、个股日线与财务（每只 4 次）、龙虎榜（每天 1 次）。首次跑完会全部缓存到 `.cache/jingshui/`，重跑不再发请求。
 
 ## 已知限制
 

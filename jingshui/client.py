@@ -50,6 +50,33 @@ class HithinkError(RuntimeError):
         return self.code in RETRYABLE
 
 
+class HttpStatusError(RuntimeError):
+    """上游返回了非 2xx 的 HTTP 状态码, 且响应体不是业务信封。
+
+    和 HithinkError 的区别: 那个是"服务处理了请求但业务上失败",
+    这个是请求根本没进到业务层 (限流、网关、鉴权中间件)。
+    两者都不是"网络不可达"。
+    """
+
+    def __init__(self, status: int, reason: str, retry_after: float | None = None, body: str = "") -> None:
+        self.status = status
+        self.reason = reason
+        self.retry_after = retry_after
+        self.body = body[:400]
+        detail = f"HTTP {status} {reason}"
+        if retry_after is not None:
+            detail += f" (Retry-After: {retry_after:g}s)"
+        if self.body:
+            detail += f" body={self.body!r}"
+        super().__init__(detail)
+
+    @property
+    def retryable(self) -> bool:
+        # 429 限流和 5xx 网关/服务端错误值得退避重试;
+        # 401/403 是鉴权或策略问题, 重试只会继续被拒。
+        return self.status == 429 or 500 <= self.status < 600
+
+
 class MissingApiKey(RuntimeError):
     """未配置 API Key。"""
 
@@ -113,8 +140,27 @@ class HithinkClient:
         req = urllib.request.Request(url, method="GET")
         req.add_header("X-api-key", self._api_key)
         req.add_header("Accept", "application/json")
-        with self._opener.open(req, timeout=self.timeout) as resp:
-            body = resp.read().decode("utf-8")
+        try:
+            with self._opener.open(req, timeout=self.timeout) as resp:
+                body = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            # HTTPError 是 URLError 的子类, 但它意味着"服务器答复了非 2xx",
+            # 不是"连不上"。必须先拦下来, 否则限流会被误报成网络不可达。
+            raw = ""
+            try:
+                raw = exc.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001 - 读不到响应体不该盖掉原始错误
+                pass
+            # 有些网关会在非 2xx 上仍然带回业务信封, 那就交给上层按 code 处理
+            try:
+                envelope = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                envelope = None
+            if isinstance(envelope, dict) and "code" in envelope:
+                return envelope
+            raise HttpStatusError(
+                exc.code, exc.reason or "", _retry_after(exc), raw
+            ) from exc
         return json.loads(body)
 
     def get(self, path: str, **params: Any) -> Any:
@@ -127,6 +173,12 @@ class HithinkClient:
         for attempt in range(self.max_retries + 1):
             try:
                 envelope = self._raw_get(path, params)
+            except HttpStatusError as exc:
+                last_exc = exc
+                if not exc.retryable or attempt >= self.max_retries:
+                    raise
+                self._sleep(attempt, exc.retry_after)
+                continue
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_exc = exc
                 if attempt >= self.max_retries:
@@ -154,8 +206,12 @@ class HithinkClient:
         assert last_exc is not None
         raise last_exc
 
-    def _sleep(self, attempt: int) -> None:
-        delay = min(2.0 ** attempt, 16.0) * (0.5 + random.random() * 0.5)
+    def _sleep(self, attempt: int, retry_after: float | None = None) -> None:
+        if retry_after is not None and retry_after > 0:
+            # 上游明确说了等多久就等多久, 别用自己的退避覆盖它
+            delay = min(retry_after, 60.0)
+        else:
+            delay = min(2.0 ** attempt, 16.0) * (0.5 + random.random() * 0.5)
         LOG.debug("retrying after %.2fs (attempt %d)", delay, attempt + 1)
         time.sleep(delay)
 
@@ -295,6 +351,20 @@ class HithinkClient:
             board_type=board_type,
             date=date,
         )
+
+
+def _retry_after(exc: "urllib.error.HTTPError") -> float | None:
+    """解析 Retry-After 响应头。只支持秒数形式, HTTP 日期形式返回 None。"""
+    try:
+        raw = exc.headers.get("Retry-After") if exc.headers else None
+    except Exception:  # noqa: BLE001
+        return None
+    if not raw:
+        return None
+    try:
+        return float(str(raw).strip())
+    except ValueError:
+        return None
 
 
 def _items(data: Any) -> list[dict]:

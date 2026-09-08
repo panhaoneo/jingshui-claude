@@ -29,6 +29,8 @@ def _pipeline(args) -> Pipeline:
         top_sectors=args.top,
         max_stocks_per_sector=args.per_sector,
         rs_reference_index=args.rs_reference,
+        request_pause=args.request_pause,
+        org_flow_days=args.org_flow_days,
         cache_dir=args.cache_dir,
     )
     return Pipeline(client, cfg)
@@ -118,14 +120,16 @@ def cmd_doctor(args, client=None) -> int:
     在受限网络里跑不通全流程时, 用它区分三种情况:
     Key 没配 / 域名被网络策略拦截 / 某个端点权限或参数有问题。
     """
+    import time
     import urllib.error
 
-    from .client import HithinkClient, HithinkError
+    from .client import HithinkClient, HithinkError, HttpStatusError
 
+    pause = getattr(args, "pause", 1.0) if args is not None else 0.0
     if client is None:
         try:
-            # 自检不重试: 目的是快速看清失败原因, 不是把请求做成功
-            client = HithinkClient(max_retries=0)
+            # 保留少量重试: 限流是暂时的, 一次 429 不代表端点不可用
+            client = HithinkClient(max_retries=2)
         except MissingApiKey as exc:
             print(f"[FAIL] API Key: {exc}")
             return 2
@@ -149,14 +153,32 @@ def cmd_doctor(args, client=None) -> int:
     ]
 
     failures = 0
-    for label, call in probes:
+    throttled = 0
+    unreachable = 0
+    for i, (label, call) in enumerate(probes):
+        if i and pause:
+            # 逐个探测本身就可能撞上限流, 主动放慢比事后解释更省事
+            time.sleep(pause)
         try:
             result = call()
         except HithinkError as exc:
             failures += 1
+            if exc.code == 4001:
+                throttled += 1
             print(f"[FAIL] {label}: 上游返回 code={exc.code} {exc.message}")
+        except HttpStatusError as exc:
+            failures += 1
+            if exc.status == 429:
+                throttled += 1
+                hint = "限流, 上游要求降低请求频率"
+            elif exc.status in (401, 403):
+                hint = "鉴权或访问策略拒绝, 检查 API Key 是否有效"
+            else:
+                hint = "网关或服务端错误"
+            print(f"[FAIL] {label}: HTTP {exc.status} {exc.reason} -> {hint}")
         except urllib.error.URLError as exc:
             failures += 1
+            unreachable += 1
             print(f"[FAIL] {label}: 网络不可达 ({exc.reason})")
         except Exception as exc:  # noqa: BLE001 - 自检要报告而不是崩掉
             failures += 1
@@ -166,36 +188,93 @@ def cmd_doctor(args, client=None) -> int:
             print(f"[ OK ] {label}: 返回 {size} 条")
 
     print()
-    if failures:
-        print(f"{len(probes) - failures}/{len(probes)} 个端点可用。")
-        print("全部失败且提示网络不可达 -> 域名被网络策略拦截, 换一台能直连的机器。")
-        print("个别失败且 code 为 2003 -> 该能力未授权; code 为 1xxx -> 参数问题。")
-        return 1
-    print(f"全部 {len(probes)} 个端点可用, 可以直接跑 python -m jingshui scan。")
-    return 0
+    if not failures:
+        print(f"全部 {len(probes)} 个端点可用, 可以直接跑 python -m jingshui scan。")
+        return 0
+
+    print(f"{len(probes) - failures}/{len(probes)} 个端点可用。")
+    if throttled:
+        print(
+            f"其中 {throttled} 个是限流 (HTTP 429 或 code=4001), 不是端点不可用。"
+            f"\n  重试: python -m jingshui doctor --pause {max(pause * 3, 3):.0f}"
+            "\n  跑全流程时同样要放慢: python -m jingshui scan --request-pause 1.0"
+        )
+    if unreachable == len(probes):
+        print("全部是网络不可达 -> 域名被网络策略或防火墙拦截, 换一台能直连的机器。")
+    print("code=2003 -> 该能力未授权; code=1xxx -> 参数问题。")
+    return 1
+
+
+DEFAULTS = {
+    "lookback": 500,
+    "tag": "industry",
+    "top": 5,
+    "per_sector": 40,
+    "rs_reference": None,
+    "request_pause": 0.15,
+    "pause": 1.0,
+    "org_flow_days": 60,
+    "cache_dir": ".cache/jingshui",
+    "out": "output",
+    "verbose": False,
+}
+
+
+class _Parser(argparse.ArgumentParser):
+    """解析完成后再补默认值。
+
+    不能用 p.set_defaults(): parents=[common] 让顶层和各子命令共享同一批
+    action 对象, set_defaults 会顺手把 action.default 从 SUPPRESS 改成真实
+    默认值, 于是子命令解析时又会覆盖掉子命令之前解析到的值。
+    """
+
+    def parse_args(self, args=None, namespace=None):  # type: ignore[override]
+        parsed = super().parse_args(args, namespace)
+        for key, value in DEFAULTS.items():
+            if not hasattr(parsed, key):
+                setattr(parsed, key, value)
+        return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="jingshui", description="景气 α 趋势跟随系统")
-    p.add_argument("--lookback", type=int, default=500, help="回看的自然日天数")
-    p.add_argument("--tag", default="industry", help="板块类别: industry / cn_concept")
-    p.add_argument("--top", type=int, default=5, help="主线板块数量")
-    p.add_argument("--per-sector", type=int, default=40, help="每个板块最多扫描的成分股数")
-    p.add_argument(
-        "--rs-reference",
-        default=None,
-        help="用于扩大 RS 样本总体的宽基指数, 如 000300.SH (会显著增加请求数)",
-    )
-    p.add_argument("--cache-dir", default=".cache/jingshui", help="缓存目录")
-    p.add_argument("--out", default="output", help="结果输出目录")
-    p.add_argument("-v", "--verbose", action="store_true")
+    """公共参数同时挂在顶层和每个子命令上, 两种写法都可用:
 
+        jingshui doctor --pause 3
+        jingshui --pause 3 doctor
+
+    关键在于所有公共参数的 default 都是 argparse.SUPPRESS: 否则子命令解析时
+    会用自己的默认值静默覆盖掉子命令之前已经解析到的值 (argparse 的已知陷阱,
+    表现为参数被无声忽略)。真正的默认值在解析结束后由 _Parser 补齐。
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    add = common.add_argument
+    sup = argparse.SUPPRESS
+    add("--lookback", type=int, default=sup, help="回看的自然日天数 (默认 500)")
+    add("--tag", default=sup, help="板块类别: industry / cn_concept (默认 industry)")
+    add("--top", type=int, default=sup, help="主线板块数量 (默认 5)")
+    add("--per-sector", type=int, default=sup, help="每个板块最多扫描的成分股数 (默认 40)")
+    add("--rs-reference", default=sup,
+        help="用于扩大 RS 样本总体的宽基指数, 如 000300.SH (会显著增加请求数)")
+    add("--request-pause", type=float, default=sup,
+        help="每次请求之间的最小间隔秒数, 撞限流时调大 (默认 0.15)")
+    add("--pause", type=float, default=sup,
+        help="doctor 每次探测之间的间隔秒数 (默认 1.0)")
+    add("--org-flow-days", type=int, default=sup,
+        help="龙虎榜回溯天数, 每天一次请求, 限流时可调小 (默认 60)")
+    add("--cache-dir", default=sup, help="缓存目录 (默认 .cache/jingshui)")
+    add("--out", default=sup, help="结果输出目录 (默认 output)")
+    add("-v", "--verbose", action="store_true", default=sup)
+
+    p = _Parser(prog="jingshui", description="景气 α 趋势跟随系统", parents=[common])
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("market", help="L0 大盘闸门").set_defaults(func=cmd_market)
-    sub.add_parser("sectors", help="L1 行业景气排名").set_defaults(func=cmd_sectors)
-    sub.add_parser("scan", help="L0->L3 全流程").set_defaults(func=cmd_scan)
-    sub.add_parser("explain", help="打印规则速查表").set_defaults(func=cmd_explain)
-    sub.add_parser("doctor", help="逐个探测端点可用性").set_defaults(func=cmd_doctor)
+    for name, help_text, func in [
+        ("market", "L0 大盘闸门", cmd_market),
+        ("sectors", "L1 行业景气排名", cmd_sectors),
+        ("scan", "L0->L3 全流程", cmd_scan),
+        ("explain", "打印规则速查表", cmd_explain),
+        ("doctor", "逐个探测端点可用性", cmd_doctor),
+    ]:
+        sub.add_parser(name, help=help_text, parents=[common]).set_defaults(func=func)
     return p
 
 
