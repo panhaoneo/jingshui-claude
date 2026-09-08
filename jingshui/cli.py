@@ -16,13 +16,14 @@ import json
 import logging
 import sys
 
-from .client import HithinkClient, MissingApiKey
+from .client import MissingApiKey
 from .pipeline import Pipeline, ScanConfig
+from .providers import PROVIDERS, build_provider
 from . import rules, screener
 
 
 def _pipeline(args) -> Pipeline:
-    client = HithinkClient()
+    client = build_provider(args.provider)
     cfg = ScanConfig(
         lookback_days=args.lookback,
         sector_tag=args.tag,
@@ -114,6 +115,19 @@ L3 买点与仓位
 
 
 
+def _sample_sector(client) -> str:
+    """取一个真实存在的板块代码用于探测成分股接口。
+
+    两个数据源的板块代码体系不同 (同花顺 886xxx.TI / 东财 BKxxxx), 写死任何
+    一个都会让另一个数据源的探测假失败, 所以从目录里取第一个。
+    """
+    try:
+        catalog = client.index_catalog("industry")
+    except Exception:  # noqa: BLE001 - 探测阶段拿不到目录就退回宽基指数
+        return "000300.SH"
+    return catalog[0]["thscode"] if catalog else "000300.SH"
+
+
 def cmd_doctor(args, client=None) -> int:
     """逐个探测框架依赖的端点, 报告哪些可用。
 
@@ -123,38 +137,48 @@ def cmd_doctor(args, client=None) -> int:
     import time
     import urllib.error
 
-    from .client import HithinkClient, HithinkError, HttpStatusError
+    from .client import HithinkError, HttpStatusError
+    from .providers._http import FetchError
 
     pause = getattr(args, "pause", 1.0) if args is not None else 0.0
+    provider_name = getattr(args, "provider", "hithink") if args is not None else "hithink"
     if client is None:
         try:
-            # 保留少量重试: 限流是暂时的, 一次 429 不代表端点不可用
-            client = HithinkClient(max_retries=2)
+            client = build_provider(provider_name)
         except MissingApiKey as exc:
             print(f"[FAIL] API Key: {exc}")
             return 2
-        print("[ OK ] API Key: 已加载 (来源: 环境变量或用户级凭据文件)")
+        if provider_name == "hithink":
+            # 保留少量重试: 限流是暂时的, 一次 429 不代表端点不可用
+            client.max_retries = 2
+            print("[ OK ] API Key: 已加载 (来源: 环境变量或用户级凭据文件)")
+        else:
+            print(f"[ OK ] 数据源: {provider_name} (零鉴权, 无需 API Key)")
 
     end = int(__import__("time").time() * 1000)
     start = end - 400 * 86_400_000
 
     probes = [
-        ("标的检索", lambda: client.search_ticker("600519", limit=1)),
-        ("行情快照", lambda: client.price_snapshot(["600519.SH"])),
         ("个股日线", lambda: client.price_history("600519.SH", start, end)),
         ("季度利润表", lambda: client.income_statements("600519.SH", "quarterly", 8)),
         ("年度利润表", lambda: client.income_statements("600519.SH", "annual", 5)),
         ("年度资产负债表", lambda: client.balance_sheets("600519.SH", "annual", 5)),
         ("行业指数目录", lambda: client.index_catalog("industry")),
         ("指数日线", lambda: client.index_history("000300.SH", start, end)),
-        ("指数成分股", lambda: client.index_constituents("000300.SH")),
-        ("估值快照", lambda: client.valuations(["600519.SH"])),
-        ("龙虎榜机构榜", lambda: client.dragon_tiger("org")),
+        ("板块成分股", lambda: client.index_constituents(_sample_sector(client))),
     ]
+    if hasattr(client, "search_ticker"):
+        probes.insert(0, ("标的检索", lambda: client.search_ticker("600519", limit=1)))
+    if hasattr(client, "price_snapshot"):
+        probes.insert(1, ("行情快照", lambda: client.price_snapshot(["600519.SH"])))
+    if hasattr(client, "valuations"):
+        probes.append(("估值快照", lambda: client.valuations(["600519.SH"])))
+    probes.append(("龙虎榜机构榜", lambda: client.dragon_tiger("org")))
 
     failures = 0
     throttled = 0
     unreachable = 0
+    skipped = 0
     seen_codes: set[int] = set()
     for i, (label, call) in enumerate(probes):
         if i and pause:
@@ -178,6 +202,15 @@ def cmd_doctor(args, client=None) -> int:
             else:
                 hint = "网关或服务端错误"
             print(f"[FAIL] {label}: HTTP {exc.status} {exc.reason} -> {hint}")
+        except FetchError as exc:
+            failures += 1
+            message = str(exc)
+            if "HTTP 429" in message or "HTTP 403" in message:
+                throttled += 1
+                print(f"[FAIL] {label}: {message} -> 限流或反爬, 降低频率后重试")
+            else:
+                unreachable += 1
+                print(f"[FAIL] {label}: {message}")
         except urllib.error.URLError as exc:
             failures += 1
             unreachable += 1
@@ -186,15 +219,25 @@ def cmd_doctor(args, client=None) -> int:
             failures += 1
             print(f"[FAIL] {label}: {type(exc).__name__}: {exc}")
         else:
+            if isinstance(result, dict) and result.get("unsupported"):
+                # 这个数据源本来就没有这项能力, 既不算可用也不算失败
+                skipped += 1
+                print(f"[ -- ] {label}: {result['unsupported']}")
+                continue
             size = len(result) if isinstance(result, (list, dict)) else 1
-            print(f"[ OK ] {label}: 返回 {size} 条")
+            if isinstance(result, list) and not result:
+                print(f"[WARN] {label}: 请求成功但返回 0 条, 可能被静默限流或参数不适用")
+            else:
+                print(f"[ OK ] {label}: 返回 {size} 条")
 
     print()
+    attempted = len(probes) - skipped
+    tail = f" ({skipped} 项该数据源不支持, 未计入)" if skipped else ""
     if not failures:
-        print(f"全部 {len(probes)} 个端点可用, 可以直接跑 python -m jingshui scan。")
+        print(f"全部 {attempted} 个端点可用{tail}, 可以直接跑 python -m jingshui scan。")
         return 0
 
-    print(f"{len(probes) - failures}/{len(probes)} 个端点可用。")
+    print(f"{attempted - failures}/{attempted} 个端点可用{tail}。")
 
     # 只解释真正出现过的失败。无条件打印一串"可能的原因"会被当成结论,
     # 让人以为遇到了根本没发生的错误。
@@ -207,7 +250,7 @@ def cmd_doctor(args, client=None) -> int:
             f"\n  python -m jingshui scan --request-pause {nxt:.0f} --org-flow-days 20"
         )
     if unreachable:
-        if unreachable == len(probes):
+        if unreachable == attempted:
             print("\n全部是网络不可达 -> 域名被网络策略或防火墙拦截, 换一台能直连的机器。")
         else:
             print(f"\n{unreachable} 个网络不可达, 可能是瞬时抖动, 重跑一次看是否复现。")
@@ -224,6 +267,7 @@ def cmd_doctor(args, client=None) -> int:
 
 
 DEFAULTS = {
+    "provider": "hithink",
     "lookback": 500,
     "tag": "industry",
     "top": 5,
@@ -279,6 +323,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="doctor 每次探测之间的间隔秒数 (默认 1.0)")
     add("--org-flow-days", type=int, default=sup,
         help="龙虎榜回溯天数, 每天一次请求, 限流时可调小 (默认 60)")
+    add("--provider", choices=PROVIDERS, default=sup,
+        help="数据源: hithink (需 API Key, 有配额) / free (零鉴权公开接口)")
     add("--cache-dir", default=sup, help="缓存目录 (默认 .cache/jingshui)")
     add("--out", default=sup, help="结果输出目录 (默认 output)")
     add("-v", "--verbose", action="store_true", default=sup)

@@ -178,8 +178,9 @@ class TestDoctor(unittest.TestCase):
     def test_reports_ok_when_all_probes_pass(self):
         from jingshui.cli import cmd_doctor
 
-        c = client([ok({"item": [{"thscode": "600519.SH"}]})] * 11)
-        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+        # 多备几条: doctor 会先取一次板块目录来挑真实存在的板块代码
+        c = client([ok({"item": [{"thscode": "600519.SH"}]})] * 20)
+        with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
             rc = cmd_doctor(None, client=c)
         self.assertEqual(rc, 0)
         self.assertNotIn("[FAIL]", out.getvalue())
@@ -409,7 +410,7 @@ class TestDoctorHintsAreEvidenceBased(unittest.TestCase):
     def test_partial_unreachable_suggests_retry_not_firewall(self):
         from jingshui.cli import cmd_doctor
 
-        script = [urllib.error.URLError("boom")] + [ok({"item": []})] * 39
+        script = [urllib.error.URLError("boom")] + [ok({"item": [{"a": 1}]})] * 39
         c = client(script)
         c.max_retries = 0
         with mock.patch("time.sleep"), mock.patch("sys.stdout", new_callable=io.StringIO) as out:
@@ -419,7 +420,7 @@ class TestDoctorHintsAreEvidenceBased(unittest.TestCase):
         self.assertNotIn("域名被网络策略", text)
 
     def test_all_pass_prints_no_hints(self):
-        text = self._run([ok({"item": []})])
+        text = self._run([ok({"item": [{"thscode": "600519.SH"}]})])
         self.assertIn("全部 11 个端点可用", text)
         for noise in ("2003", "参数问题", "限流", "网络不可达"):
             self.assertNotIn(noise, text)
