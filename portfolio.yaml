@@ -6,4 +6,24 @@
 #     batches:
 #       - {date: 2026-08-20, price: 520.0, weight: 0.10}
 #       - {date: 2026-08-25, price: 535.0, weight: 0.08}
-holdings: []
+holdings: [
+  - code: 603268.SH
+    batches: [
+      - {date: 2026-09-01, price: 185.0, weight: 0.10}
+    ],
+  
+  - code: 600428.SH
+    batches: [
+      - {date: 2026-09-01, price: 11.66, weight: 0.10}
+    ],
+  
+  - code: 600685.SH
+    batches: [
+      - {date: 2026-09-01, price: 26.0, weight: 0.10}
+    ],
+
+  - code: 600685.SH
+    batches: [
+      - {date: 2026-09-01, price: 26.0, weight: 0.10}
+    ],
+]
