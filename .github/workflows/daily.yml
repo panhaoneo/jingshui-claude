@@ -1,0 +1,139 @@
+name: 每日选股
+
+on:
+  schedule:
+    - cron: "40 10 * * 1-5"   # 北京时间 18:40（收盘后）
+    - cron: "30 13 * * 1-5"   # 北京时间 21:30（数据未就绪时的重试；已有结果会自动跳过）
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "交易日 YYYY-MM-DD（留空 = 最近一个已收盘交易日）"
+        required: false
+        default: ""
+      force:
+        description: "已有结果也重跑"
+        type: boolean
+        default: false
+      backfill_days:
+        description: "按时间顺序补跑最近 N 个交易日（0 = 不补跑）"
+        required: false
+        default: "0"
+      provider:
+        description: "数据源"
+        type: choice
+        options: [hithink, free]
+        default: hithink
+  push:
+    branches: [main]
+    paths: ["site/*.html", "site/*.js", "site/*.css"]   # 只改页面时只重新部署
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: daily-screen
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      status: ${{ steps.run.outputs.status }}
+    env:
+      TZ: Asia/Shanghai
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        if: github.event_name != 'push'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        if: github.event_name != 'push'
+        run: pip install -r requirements.txt
+
+      - name: 单元测试
+        if: github.event_name != 'push'
+        run: python -m pytest -q
+
+      - name: 恢复数据缓存（日线库 / 财报 / 板块 / 龙虎榜）
+        if: github.event_name != 'push'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/jingshui
+          key: jingshui-${{ github.run_id }}
+          restore-keys: jingshui-
+
+      - name: 运行选股
+        id: run
+        if: github.event_name != 'push'
+        env:
+          HITHINK_FINANCE_API_KEY: ${{ secrets.HITHINK_FINANCE_API_KEY }}
+          IN_DATE: ${{ inputs.date }}
+          IN_FORCE: ${{ inputs.force }}
+          IN_BACKFILL: ${{ inputs.backfill_days }}
+          IN_PROVIDER: ${{ inputs.provider }}
+        run: |
+          set +e
+          PROVIDER="${IN_PROVIDER:-hithink}"
+          if [ -n "$IN_BACKFILL" ] && [ "$IN_BACKFILL" != "0" ]; then
+            python -m jingshui backfill --days "$IN_BACKFILL" --provider "$PROVIDER"
+          else
+            ARGS="--provider $PROVIDER"
+            [ -n "$IN_DATE" ] && ARGS="$ARGS --date $IN_DATE"
+            [ "$IN_FORCE" = "true" ] && ARGS="$ARGS --force"
+            python -m jingshui run $ARGS
+          fi
+          code=$?
+          if [ $code -eq 3 ]; then
+            echo "::notice::行情数据尚未更新到最新交易日，等待下一次定时任务重试"
+            exit 0
+          fi
+          exit $code
+
+      - name: 清理临时下载（dump 原文件不进缓存）
+        if: always() && github.event_name != 'push'
+        run: rm -rf .cache/jingshui/dumps && du -sh .cache/jingshui || true
+
+      - name: 保存数据缓存
+        if: always() && github.event_name != 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/jingshui
+          key: jingshui-${{ github.run_id }}
+
+      - name: 提交每日结果
+        if: steps.run.outputs.status == 'ok'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data
+          if git diff --cached --quiet; then
+            echo "无变化"
+          else
+            git commit -m "data: ${{ steps.run.outputs.date || 'backfill' }} 每日选股结果"
+            git pull --rebase --autostash
+            git push
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: screen
+    if: needs.screen.outputs.status == 'ok' || github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

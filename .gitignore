@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.cache/
+.pytest_cache/
+output/
+*.parquet
+credentials.env
+.env
+.claude/

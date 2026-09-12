@@ -1,0 +1,543 @@
+{
+ "days": [
+  {
+   "date": "2026-09-11",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-09-10",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-09-09",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行",
+    "种植业与林业"
+   ]
+  },
+  {
+   "date": "2026-09-08",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行",
+    "种植业与林业"
+   ]
+  },
+  {
+   "date": "2026-09-07",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行",
+    "种植业与林业"
+   ]
+  },
+  {
+   "date": "2026-09-04",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-09-03",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-09-02",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-09-01",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-31",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行",
+    "煤炭开采加工"
+   ]
+  },
+  {
+   "date": "2026-08-28",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-27",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-26",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-25",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-24",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-21",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-20",
+   "m_state": "DEFENSE",
+   "buy": 2,
+   "candidates": 3,
+   "mainline": [
+    "医疗服务",
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-19",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-18",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-17",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-14",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 1,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-13",
+   "m_state": "DEFENSE",
+   "buy": 1,
+   "candidates": 2,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-12",
+   "m_state": "DEFENSE",
+   "buy": 1,
+   "candidates": 1,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-11",
+   "m_state": "DEFENSE",
+   "buy": 2,
+   "candidates": 2,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-10",
+   "m_state": "DEFENSE",
+   "buy": 1,
+   "candidates": 1,
+   "mainline": [
+    "医疗服务"
+   ]
+  },
+  {
+   "date": "2026-08-07",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-08-06",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-08-05",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-08-04",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-08-03",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-07-31",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-07-30",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
+   "date": "2026-07-29",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-28",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-27",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-24",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-23",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-22",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-21",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-20",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-17",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-16",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-15",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-14",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-13",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-10",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-09",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-08",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-07",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": []
+  },
+  {
+   "date": "2026-07-06",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "自动化设备"
+   ]
+  },
+  {
+   "date": "2026-07-03",
+   "m_state": "DEFENSE",
+   "buy": 1,
+   "candidates": 3,
+   "mainline": [
+    "自动化设备",
+    "塑料制品"
+   ]
+  },
+  {
+   "date": "2026-07-02",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "光学光电子",
+    "自动化设备",
+    "塑料制品"
+   ]
+  },
+  {
+   "date": "2026-07-01",
+   "m_state": "CAUTION",
+   "buy": 2,
+   "candidates": 4,
+   "mainline": [
+    "电子化学品",
+    "光学光电子",
+    "元件",
+    "其他电子",
+    "自动化设备"
+   ]
+  },
+  {
+   "date": "2026-06-30",
+   "m_state": "DEFENSE",
+   "buy": 2,
+   "candidates": 24,
+   "mainline": [
+    "电子化学品",
+    "半导体",
+    "元件",
+    "其他电子",
+    "光学光电子"
+   ]
+  },
+  {
+   "date": "2026-06-29",
+   "m_state": "DEFENSE",
+   "buy": 3,
+   "candidates": 15,
+   "mainline": [
+    "半导体",
+    "电子化学品",
+    "光学光电子"
+   ]
+  },
+  {
+   "date": "2026-06-26",
+   "m_state": "DEFENSE",
+   "buy": 4,
+   "candidates": 12,
+   "mainline": [
+    "电子化学品",
+    "半导体",
+    "元件",
+    "光学光电子",
+    "其他电子"
+   ]
+  },
+  {
+   "date": "2026-06-25",
+   "m_state": "CAUTION",
+   "buy": 8,
+   "candidates": 24,
+   "mainline": [
+    "电子化学品",
+    "元件",
+    "半导体",
+    "其他电子",
+    "自动化设备"
+   ]
+  },
+  {
+   "date": "2026-06-24",
+   "m_state": "CAUTION",
+   "buy": 4,
+   "candidates": 17,
+   "mainline": [
+    "电子化学品",
+    "半导体",
+    "元件",
+    "其他电子",
+    "自动化设备"
+   ]
+  },
+  {
+   "date": "2026-06-23",
+   "m_state": "CAUTION",
+   "buy": 0,
+   "candidates": 5,
+   "mainline": [
+    "电子化学品",
+    "半导体",
+    "自动化设备",
+    "其他电子",
+    "非金属材料"
+   ]
+  },
+  {
+   "date": "2026-06-22",
+   "m_state": "CAUTION",
+   "buy": 5,
+   "candidates": 18,
+   "mainline": [
+    "电子化学品",
+    "元件",
+    "半导体",
+    "非金属材料",
+    "小金属"
+   ]
+  }
+ ],
+ "updated": "2026-09-12 09:09:18"
+}
