@@ -22,8 +22,8 @@ holdings: [
       - {date: 2026-09-01, price: 26.0, weight: 0.10}
     ],
 
-  - code: 600685.SH
+  - code: 603259.SH
     batches: [
-      - {date: 2026-09-01, price: 26.0, weight: 0.10}
+      - {date: 2026-09-02, price: 155.0, weight: 0.10}
     ],
 ]
