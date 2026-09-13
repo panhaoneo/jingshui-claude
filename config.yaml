@@ -76,3 +76,9 @@ sell:                          # 卖出触发（持仓体检）
   rs_from: 80
   rs_to: 60
   hold_8w_gain: 0.20           # 3 周内涨 ≥20% → 锁定持有 8 周
+
+docs:                          # 巨潮资讯公告链接（入选股票的定期报告 / 招股书 PDF 直链，零鉴权）
+  enabled: true                # 关闭后完全跳过（不请求、不写缓存）
+  interval: 0.5                # 串行请求最小间隔（秒）
+  cache_days: 5                # 定期报告链接缓存有效期（天）
+  cache_days_season: 1         # 披露旺季（4/8/10 月）

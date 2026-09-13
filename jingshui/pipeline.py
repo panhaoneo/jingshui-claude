@@ -4,6 +4,7 @@
 
 另外输出一份"全市场领军（非主线）"研究池：不属于主线板块、但 RS ≥90 且接近新高的股票，
 同样打分，仅供研究，不进入可下单列表（框架规定 L2 只在主线板块内选股）。
+并为展示列表中的股票附上巨潮公告链接（最新定期报告 / 上市招股说明书，仅作阅读用途）。
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import yaml
 from . import __version__
 from .cache import Cache
 from .client import ApiError
+from .cninfo import CninfoClient
 from .fundamentals import a_metrics, c_metrics
 from .market import market_gate
 from .providers import make_provider
@@ -84,6 +86,7 @@ class Runner:
         self.warnings: list[str] = []
         self.fetch_end: pd.Timestamp | None = None
         self._idx_mem: dict[str, pd.DataFrame] = {}
+        self._cninfo: CninfoClient | None = None
 
     def backfill(self, days: int) -> list[dict]:
         """按时间顺序补跑最近 N 个交易日（时点纪律：每一天只用当天已知的数据）。
@@ -170,6 +173,46 @@ class Runner:
         all_ = pd.concat(frames, ignore_index=True)
         all_["org_net_value"] = pd.to_numeric(all_["org_net_value"], errors="coerce")
         return all_.groupby("thscode")["org_net_value"].sum()
+
+    def docs_links(self, codes: list[str], asof: pd.Timestamp) -> dict[str, dict]:
+        """巨潮公告链接（最新定期报告 / 招股说明书）。orgId 永久缓存；招股书找到后永久缓存；
+        定期报告按 docs.cache_days / 披露旺季 TTL 刷新。链接取"当前最新"，补跑历史时不做时点还原。"""
+        d = self.cfg.get("docs") or {}
+        if not d.get("enabled", False) or not codes:
+            return {}
+        ttl = d.get("cache_days_season", 1) if asof.month in (4, 8, 10) else d.get("cache_days", 5)
+        if self._cninfo is None:
+            self._cninfo = CninfoClient(min_interval=d.get("interval", 0.5))
+        today = pd.Timestamp.now(BJ).date()
+        out, fail = {}, 0
+        for code in codes:
+            p = self.cache.path("cninfo", f"{code}.json")
+            try:
+                rec = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+            except ValueError:
+                rec = {}
+            fetched = pd.Timestamp(rec["fetched"]).date() if rec.get("fetched") else None
+            # TTL 按取数当天（wall-clock）判断：补跑历史时同一次运行内只取一次，不做时点还原
+            if fetched is None or (today - fetched).days >= ttl:
+                try:
+                    if not rec.get("org_id"):
+                        rec["org_id"] = self._cninfo.org_id(code.partition(".")[0])
+                    if rec.get("org_id"):
+                        rec["report"] = self._cninfo.latest_report(code, rec["org_id"])
+                        if rec.get("prospectus") is None:
+                            rec["prospectus"] = self._cninfo.prospectus(code, rec["org_id"])
+                    rec["fetched"] = f"{today:%Y-%m-%d}"
+                    self.cache.write_json(p, rec)
+                except Exception as exc:
+                    log.warning("巨潮公告 %s 获取失败: %s", code, exc)
+                    fail += 1
+                    if rec.get("org_id"):  # 保住已拿到的 orgId，下次只补缺失部分
+                        self.cache.write_json(p, rec)
+            if rec.get("report") or rec.get("prospectus"):
+                out[code] = {"report": rec.get("report"), "prospectus": rec.get("prospectus")}
+        if fail and fail == len(codes):
+            self.warnings.append("巨潮公告链接获取失败（网络不可达？），本次输出未含财报/招股书链接")
+        return out
 
     # ---------- 主流程 ----------
     def run(self, asof: str | None = None, force: bool = False, allow_stale: bool = False) -> dict:
@@ -327,9 +370,15 @@ class Runner:
         # ---- 持仓体检 ----
         portfolio = self.check_portfolio(panel, tech, market["state"], asof_d)
 
+        # ---- 巨潮公告链接（最新定期报告 / 招股书，覆盖候选/接近入选/研究/持仓） ----
+        codes = sorted({s["code"] for s in scored} | {h["code"] for h in portfolio if h.get("code")})
+        docs = self.docs_links(codes, asof_d)
+        for h in portfolio:
+            h["docs"] = docs.get(h["code"])
+
         # ---- 输出 ----
         result = self.build_output(asof_d, panel, market, sectors, scored, excl_counts,
-                                   len(tech), len(main_codes), portfolio, t0)
+                                   len(tech), len(main_codes), portfolio, docs, t0)
         self.write(asof_d, result, panel, scored, idx_frames)
         return {"status": "ok", "date": f"{asof_d:%Y-%m-%d}",
                 "buy": len(result["buy_signals"]), "candidates": len(result["candidates"])}
@@ -420,7 +469,7 @@ class Runner:
 
     # ---------- 组装 ----------
     def build_output(self, asof_d, panel, market, sectors, scored, excl_counts, n_universe, n_main,
-                     portfolio, t0) -> dict:
+                     portfolio, docs, t0) -> dict:
         cfg = self.cfg
         tracked, streak = self.track_signals(panel, asof_d)
         cap = market["position_cap"]
@@ -442,7 +491,7 @@ class Runner:
                 "report_period": (s["fin_c"] or {}).get("period"),
                 "report_date": (s["fin_c"] or {}).get("report_date"),
                 "l3": s.get("l3"), "valuation": s.get("valuation"),
-                "streak": streak.get(s["code"], 0),
+                "streak": streak.get(s["code"], 0), "docs": docs.get(s["code"]),
             }
 
         passed = [s for s in scored if s["passed"] and s["mainline"]]
