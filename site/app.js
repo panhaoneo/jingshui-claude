@@ -307,11 +307,23 @@
   // ---------- 详情 ----------
   function findStock(code) {
     const d = S.day;
-    for (const list of [d.buy_signals, d.candidates, d.near_miss, d.research]) {
+    for (const list of [d.buy_signals, d.candidates, d.near_miss, d.research, d.portfolio]) {
       const r = (list || []).find((x) => x.code === code);
       if (r) return r;
     }
     return null;
+  }
+
+  const docLink = (x) => (x?.url
+    ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}${x.date ? ` · ${x.date}` : ""} ↗</a>`
+    : '<span class="muted">—</span>');
+
+  function docsCard(dc) {
+    if (!dc) return "";
+    return `<div class="card"><div class="card-h"><h3>财报与公告</h3><span class="muted small">巨潮资讯 PDF 原文</span></div><div class="card-b"><div class="kv">
+      <div><span>最新定期报告</span><span class="kvdoc">${docLink(dc.report)}</span></div>
+      <div><span>上市招股书</span><span class="kvdoc">${docLink(dc.prospectus)}</span></div>
+    </div><p class="note">链接取当前最新公告，仅供阅读。</p></div></div>`;
   }
 
   function openDetail(code) {
@@ -319,8 +331,17 @@
     const dr = $("#drawer");
     const chartData = S.charts?.[code];
     const fresh = S.day.meta.date === S.latest;
+    const full = !!(r && r.factors); // 持仓条目只有行情与公告，无评分字段
     if (!r) {
       dr.innerHTML = `<div class="dh"><span class="t">${code}</span><button class="btn x" id="dx">关闭</button></div><div class="db"><div class="kline" id="kline"></div></div>`;
+    } else if (!full) {
+      dr.innerHTML = `
+        <div class="dh"><span class="t">${esc(r.name || code)}</span><span class="code">${r.code}</span><span class="pill">持仓</span>
+          <button class="btn x" id="dx">关闭</button></div>
+        <div class="db stack">
+          <div class="card"><div class="card-b">${fresh && chartData ? '<div class="kline" id="kline"></div>' : '<div class="empty">K 线仅保留最新交易日的数据。</div>'}</div></div>
+          ${docsCard(r.docs)}
+        </div>`;
     } else {
       const c = r.details?.C || {}, a = r.details?.A || {}, l3 = r.l3 || {};
       const fd = {
@@ -338,6 +359,7 @@
           <button class="btn x" id="dx">关闭</button></div>
         <div class="db stack">
           <div class="card"><div class="card-b">${fresh && chartData ? '<div class="kline" id="kline"></div>' : '<div class="empty">K 线仅保留最新交易日的数据。</div>'}</div></div>
+          ${docsCard(r.docs)}
           <div class="factors">${Object.keys(W).map((k) => `<div class="factor ${r.factors[k] <= 0 && ["C", "A", "N", "L"].includes(k) ? "zero" : ""}"><div><span class="k">${k}</span> <span class="w">${FNAME[k]}</span></div><div class="v">${num(r.factors[k], 1)}<span class="w"> / ${W[k]}</span></div><div class="d">${esc(fd[k])}</div></div>`).join("")}</div>
           <div class="card"><div class="card-h"><h3>L3 买点</h3>${l3.ok ? '<span class="pill ok">可下单</span>' : ""}</div><div class="card-b">
             ${l3.status ? `<p style="margin:0 0 10px"><b>${esc(l3.status)}</b></p>` : '<p class="muted">未进入 L3（L2 未入选）。</p>'}
