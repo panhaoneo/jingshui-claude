@@ -55,7 +55,18 @@ def main(argv=None) -> int:
             logging.info("补跑完成：%s", [f"{r['date']}:{r['status']}" for r in done])
             _gh_output(status="ok")
             return 0
-        res = runner.run(args.date, force=args.force, allow_stale=args.allow_stale)
+        res, not_ready = None, None
+        try:
+            res = runner.run(args.date, force=args.force, allow_stale=args.allow_stale)
+        except NotReady as exc:
+            not_ready = exc
+        try:  # 主结果之外，顺带补齐最近缺失的日报（被延迟/漏跑的任务自愈）
+            filled = runner.catch_up()
+        except Exception as exc:  # 补跑失败不影响主结果
+            logging.warning("补齐历史缺失日报失败：%s", exc)
+            filled = []
+        if not_ready is not None and not filled:
+            raise not_ready
     except NotReady as exc:
         logging.warning("%s", exc)
         _gh_output(status="not_ready")
@@ -64,8 +75,13 @@ def main(argv=None) -> int:
         logging.error("认证失败：%s", exc)
         _gh_output(status="error")
         return 1
-    logging.info("完成：%s", res)
-    _gh_output(status=res["status"], date=res.get("date", ""))
+    if res is None:
+        logging.info("主结果未就绪，已补齐历史缺失日报：%s", filled)
+        _gh_output(status="ok", date=filled[-1])
+    else:
+        logging.info("完成：%s", res)
+        _gh_output(status="ok" if filled else res.get("status", "ok"),
+                   date=max([res.get("date", "")] + filled))
     return 0
 
 

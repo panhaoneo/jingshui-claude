@@ -100,6 +100,28 @@ class Runner:
                 log.warning("%s：%s", d.date(), exc)
         return out
 
+    def catch_up(self, max_days: int = 7) -> list[str]:
+        """补齐最近若干交易日中缺失的日报（定时任务被延迟、漏跑后的自愈）。
+
+        只处理行情库里已有 K 线的日期——通常来自 dump 更新；没有数据的日期继续等，
+        下一次运行会自动再试。补出的日报与 backfill 一样是事后生成，成分股为当前口径。"""
+        tdays = self.p.trading_days()
+        latest = resolve_asof(tdays, None)
+        recent = [d for d in tdays if d <= latest][-max_days:]
+        filled = []
+        for d in recent:
+            if (self.out_dir / "daily" / f"{d:%Y-%m-%d}.json").exists():
+                continue
+            try:
+                r = self.run(f"{d:%Y-%m-%d}")
+            except NotReady as exc:
+                log.info("补跑 %s 暂缺数据，等下一次：%s", d.date(), exc)
+                continue
+            if r.get("status") == "ok":
+                filled.append(r["date"])
+                log.info("补跑缺失日报 %s 完成", r["date"])
+        return filled
+
     # ---------- 缓存封装 ----------
     def index_frame(self, code: str, asof: pd.Timestamp, days: int = 900) -> pd.DataFrame:
         """指数/板块日线：本地缓存 + 增量更新；同一进程内只请求一次（backfill 复用）。"""

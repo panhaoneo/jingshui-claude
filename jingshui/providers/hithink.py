@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import time as dt_time
 
 import pandas as pd
 
@@ -23,6 +24,32 @@ log = logging.getLogger(__name__)
 
 KLINE_COLS = ["thscode", "date", "open", "high", "low", "close", "volume", "turnover"]
 QMAP = {"Q1": 1, "Q2": 2, "H1": 2, "Q3": 3, "Q4": 4, "FY": 4}
+
+
+def snapshot_covers(snap_time: pd.Timestamp, asof: pd.Timestamp, tdays: list[pd.Timestamp]) -> bool:
+    """快照时刻的行情是否就是 asof 当日的完整日线。
+
+    快照在收盘后（≥15:00）到下一交易日集合竞价（09:15）之前，反映的都是最近一个
+    已收盘交易日的完整行情；非交易日（周末/节假日）全天如此。定时任务被 GitHub
+    延迟到次日凌晨触发时，用它仍能补出前一交易日的 K 线。
+    """
+    snap_date = snap_time.normalize()
+    last_closed = None
+    for d in tdays:
+        if d > snap_date or (d == snap_date and snap_time.time() < dt_time(15, 0)):
+            break
+        last_closed = d
+    if last_closed != asof:
+        return False
+    if snap_date == asof:
+        return True
+    return snap_date not in set(tdays) or snap_time.time() < dt_time(9, 15)
+
+
+def recent_missing_days(store_dates, window: list[pd.Timestamp]) -> list[pd.Timestamp]:
+    """给定交易日窗口，行情库本地没有 K 线的那些日期。"""
+    have = set(pd.DatetimeIndex(store_dates).unique())
+    return [d for d in window if d not in have]
 
 
 class HiThinkProvider(Provider):
@@ -38,6 +65,7 @@ class HiThinkProvider(Provider):
         self._tdays: list[pd.Timestamp] | None = None
         self._store: pd.DataFrame | None = None
         self._events: pd.DataFrame | None = None
+        self._patch_tried = False
 
     # ---------- 基础 ----------
     def trading_days(self) -> list[pd.Timestamp]:
@@ -113,7 +141,7 @@ class HiThinkProvider(Provider):
         return store
 
     def _snapshot_bar(self, asof: pd.Timestamp) -> pd.DataFrame | None:
-        """dump 未发布当日数据时，用全市场快照拼当日 K 线（快照时间须在 asof 当日 15:00 之后）。"""
+        """dump 未发布当日数据时，用全市场快照拼当日 K 线（快照须代表 asof 当日完整行情）。"""
         rows, offset, ts = [], 0, None
         while True:
             data = self.client.get("/api/a-share/prices/snapshot", {"limit": 1000, "offset": offset})
@@ -126,8 +154,8 @@ class HiThinkProvider(Provider):
         if not ts or not rows:
             return None
         snap_time = pd.to_datetime(ts, unit="ms", utc=True).tz_convert("Asia/Shanghai").tz_localize(None)
-        if snap_time.normalize() != asof or snap_time.hour < 15:
-            log.info("快照时间 %s 不是 %s 收盘后，不拼当日 K 线", snap_time, asof.date())
+        if not snapshot_covers(snap_time, asof, self.trading_days()):
+            log.info("快照时间 %s 不代表 %s 收盘后的完整行情，不拼当日 K 线", snap_time, asof.date())
             return None
         df = pd.DataFrame(rows)
         df = df[(df["volume"] > 0) & df["last_price"].notna()]
@@ -149,6 +177,47 @@ class HiThinkProvider(Provider):
             log.warning("复权事件下载失败，使用未复权价格：%s", exc)
             return None
 
+    def _patch_recent_gaps(self, asof: pd.Timestamp) -> pd.DataFrame | None:
+        """dump 未更新、快照也不可用时，用腾讯逐只补出最近缺失交易日的原始日线。
+
+        只在最近几个交易日出现缺口（当日任务被延迟/漏跑）时触发，一次最多补 3 天；
+        价格与交易所原始数据一致，成交额按 量×均价 估算，会写进报告的 warnings。
+        同一进程内只尝试一次，失败就等下一次运行。"""
+        if self._patch_tried:
+            return None
+        self._patch_tried = True
+        tdays = self.trading_days()
+        window = [d for d in tdays if d <= asof][-5:]
+        store_max = self._store["date"].max() if len(self._store) else pd.NaT
+        if not window or pd.isna(store_max) or store_max < window[0]:
+            return None  # 行情库整体落后太深，等 dump 全量更新，不值得逐只拉
+        missing = recent_missing_days(self._store["date"], window)
+        if not missing:
+            return None
+        days = missing[-3:]
+        start, end = days[0], days[-1]
+        from .free import tencent_kline, to_prefixed  # 与流通市值一样复用腾讯公开接口
+        codes = list(self.universe()["thscode"])
+
+        def one(c: str):
+            df = tencent_kline(to_prefixed(c), count=20, adjust="")
+            if df.empty:
+                return None
+            df["thscode"] = c
+            return df[(df["date"] >= start) & (df["date"] <= end)]
+
+        frames = []
+        with ThreadPoolExecutor(self.max_workers) as ex:
+            for df in ex.map(one, codes):
+                if df is not None and not df.empty:
+                    frames.append(df)
+        if not frames:
+            return None
+        bar = pd.concat(frames, ignore_index=True)[KLINE_COLS]
+        log.warning("补齐最近缺口交易日 %s（腾讯逐只，成交额按均价估算）",
+                    "、".join(f"{d:%Y-%m-%d}" for d in days))
+        return bar
+
     def price_panel(self, asof: pd.Timestamp, keep_days: int) -> PricePanel:
         notes = []
         if self._store is None:  # 同一进程内（如 backfill）只更新一次
@@ -162,6 +231,13 @@ class HiThinkProvider(Provider):
                 store = store.drop_duplicates(["thscode", "date"], keep="last")
                 self._store = store
                 notes.append(f"{asof.date()} 日线来自收盘快照（dump 尚未发布）")
+        patch = self._patch_recent_gaps(asof)
+        if patch is not None and not patch.empty:
+            store = pd.concat([store, patch], ignore_index=True)
+            store = store.drop_duplicates(["thscode", "date"], keep="last")
+            self._store = store
+            gap_days = "、".join(f"{d:%Y-%m-%d}" for d in sorted(patch["date"].unique()))
+            notes.append(f"缺口交易日 {gap_days} 用腾讯逐只补数（成交额按均价估算，dump 更新后自动覆盖）")
         if self._events is None:
             notes.append("复权事件下载失败，本日使用未复权价格")
         store = store[store["date"] <= asof].sort_values(["thscode", "date"]).reset_index(drop=True)

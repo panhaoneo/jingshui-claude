@@ -6,6 +6,7 @@ from jingshui.adjust import forward_factors
 from jingshui.fundamentals import a_metrics, c_metrics, growth_decelerating, single_quarters, yoy
 from jingshui.market import evaluate_index
 from jingshui.pipeline import load_config
+from jingshui.providers.hithink import snapshot_covers
 from jingshui.scoring import score_a, score_c, score_n, score_stock
 from jingshui.sectors import score_sectors
 from jingshui.signals import buy_point
@@ -37,6 +38,68 @@ def test_forward_adjust_cash_dividend():
 def test_forward_adjust_no_events():
     k = pd.DataFrame({"thscode": "C.SZ", "date": pd.bdate_range("2026-01-05", periods=3), "close": [1.0, 2.0, 3.0]})
     assert list(forward_factors(k, None)) == [1.0, 1.0, 1.0]
+
+
+# ---------------- 快照补数窗口（定时任务被延迟到次日时的自愈依据） ----------------
+TDAYS = [pd.Timestamp(d) for d in ["2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15"]]
+
+
+def test_snapshot_same_day_after_close():
+    assert snapshot_covers(pd.Timestamp("2026-09-14 18:40"), pd.Timestamp("2026-09-14"), TDAYS)
+    assert not snapshot_covers(pd.Timestamp("2026-09-14 14:59"), pd.Timestamp("2026-09-14"), TDAYS)
+
+
+def test_snapshot_overnight_covers_previous_day():
+    # GitHub 延迟到次日凌晨/盘前触发时，快照仍是前一交易日的收盘行情
+    assert snapshot_covers(pd.Timestamp("2026-09-15 00:33"), pd.Timestamp("2026-09-14"), TDAYS)
+    assert snapshot_covers(pd.Timestamp("2026-09-15 08:40"), pd.Timestamp("2026-09-14"), TDAYS)
+
+
+def test_snapshot_other_sessions_refused():
+    # 次日集合竞价/盘中/收盘后的快照都不是前一交易日的行情
+    for t in ("2026-09-15 09:20", "2026-09-15 11:00", "2026-09-15 18:40"):
+        assert not snapshot_covers(pd.Timestamp(t), pd.Timestamp("2026-09-14"), TDAYS)
+
+
+def test_snapshot_weekend_and_monday_preopen_cover_friday():
+    assert snapshot_covers(pd.Timestamp("2026-09-12 10:00"), pd.Timestamp("2026-09-11"), TDAYS)
+    assert snapshot_covers(pd.Timestamp("2026-09-14 08:00"), pd.Timestamp("2026-09-11"), TDAYS)
+    assert not snapshot_covers(pd.Timestamp("2026-09-12 10:00"), pd.Timestamp("2026-09-10"), TDAYS)
+
+
+def test_recent_missing_days():
+    from jingshui.providers.hithink import recent_missing_days
+    have = pd.Series(TDAYS[:3])  # 本地只有 9/9~9/11
+    assert recent_missing_days(have, TDAYS[-3:]) == TDAYS[-2:]
+
+
+def test_patch_recent_gaps_fills_hole(monkeypatch):
+    """dump 未更新时，缺口交易日由腾讯逐只原始日线补齐。"""
+    from jingshui.providers import free as F
+    from jingshui.providers.hithink import HiThinkProvider, KLINE_COLS
+    monkeypatch.setenv("HITHINK_FINANCE_API_KEY", "sk-test-not-a-real-key")
+    p = HiThinkProvider(CFG, cache=None)
+    p._tdays = TDAYS
+    cols = {"open": [1.0] * 3, "high": [1.0] * 3, "low": [1.0] * 3, "close": [1.0] * 3,
+            "volume": [1.0] * 3, "turnover": [1.0] * 3}
+    p._store = pd.DataFrame({"thscode": ["A.SZ"] * 3, "date": TDAYS[:3], **cols})
+    monkeypatch.setattr(p, "universe", lambda: pd.DataFrame({"thscode": ["A.SZ", "B.SZ"]}))
+    monkeypatch.setattr(F, "tencent_kline", lambda prefixed, count=640, adjust="qfq": pd.DataFrame(
+        [{"date": TDAYS[3], "open": 2.0, "close": 2.1, "high": 2.2, "low": 1.9, "volume": 200.0, "turnover": 420.0}]))
+    bar = p._patch_recent_gaps(pd.Timestamp("2026-09-14"))
+    assert bar is not None and list(bar["date"]) == [TDAYS[3], TDAYS[3]]
+    assert set(bar["thscode"]) == {"A.SZ", "B.SZ"} and list(bar.columns) == KLINE_COLS
+
+
+def test_patch_skipped_when_store_far_behind(monkeypatch):
+    from jingshui.providers.hithink import HiThinkProvider
+    monkeypatch.setenv("HITHINK_FINANCE_API_KEY", "sk-test-not-a-real-key")
+    p = HiThinkProvider(CFG, cache=None)
+    p._tdays = TDAYS
+    p._store = pd.DataFrame({"thscode": ["A.SZ"] * 3, "date": [pd.Timestamp("2026-08-01")] * 3,
+                             "open": [1.0] * 3, "high": [1.0] * 3, "low": [1.0] * 3,
+                             "close": [1.0] * 3, "volume": [1.0] * 3, "turnover": [1.0] * 3})
+    assert p._patch_recent_gaps(pd.Timestamp("2026-09-14")) is None
 
 
 # ---------------- 财务口径 ----------------
