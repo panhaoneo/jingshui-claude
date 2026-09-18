@@ -123,4 +123,30 @@ def test_http_error_gives_up_after_retries():
     cl, s = make(fail_times=99)
     with pytest.raises(RuntimeError):
         cl.org_id("000001")
-    assert len(s.calls) == 4  # 1 次 + 3 次重试
+    assert len(s.calls) == 8  # https 1 次 + 3 次重试，降级 http 后同样 1 次 + 3 次重试
+
+
+class SchemeSession(FakeSession):
+    """https 一律 403（模拟 CDN 反爬），http 正常。"""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.urls = []
+
+    def post(self, url, data=None, timeout=None):
+        self.urls.append(url)
+        if url.startswith("https://"):
+            return FakeResp(None, status=403)
+        return super().post(url, data=data, timeout=timeout)
+
+
+def test_https_bot_block_falls_back_to_http_and_sticks():
+    s = SchemeSession(org=[{"code": "000001", "orgId": "gssz0000001"}], reports=REPORTS, prospectus=PROSPECTUS)
+    cl = CninfoClient(min_interval=0, retries=0, session=s)
+    d = cl.docs("000001.SZ")
+    assert d["report"]["title"] == "2026年半年度报告"
+    # 首次调用 https 被 403 后降级 http，且此后固定 http：后续请求不再试 https
+    assert s.urls == ["https://www.cninfo.com.cn/new/information/topSearch/query",
+                      "http://www.cninfo.com.cn/new/information/topSearch/query",
+                      "http://www.cninfo.com.cn/new/hisAnnouncement/query",
+                      "http://www.cninfo.com.cn/new/hisAnnouncement/query"]

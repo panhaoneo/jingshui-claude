@@ -23,6 +23,7 @@ from .models import ms_to_date
 log = logging.getLogger(__name__)
 
 BASE = "https://www.cninfo.com.cn"
+BASE_HTTP = "http://www.cninfo.com.cn"
 STATIC_PDF = "https://static.cninfo.com.cn/"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -81,6 +82,7 @@ class CninfoClient:
         self.timeout = timeout
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": UA, "Referer": BASE + "/"})
+        self._base = BASE  # 首个成功的协议固定下来，后续请求沿用
         self._last = 0.0
         self.calls = 0
 
@@ -91,7 +93,26 @@ class CninfoClient:
         self._last = time.monotonic()
 
     def _post(self, path: str, data: dict) -> Any:
-        url = BASE + path
+        """先 https，失败再降级 http。
+
+        巨潮 CDN 对非浏览器的 TLS 指纹会判定为机器人（HTTP 403，响应带 Ws-Action: bot），
+        数据中心出口尤其常见；http 无此指纹面、接口参数同样公开无鉴权（PDF 链接仍为 https，
+        由读者浏览器访问）。成功后固化协议，避免每次请求都白试一次。"""
+        bases = [self._base] + [b for b in (BASE, BASE_HTTP) if b != self._base]
+        last_exc: Exception | None = None
+        for base in bases:
+            try:
+                out = self._post_once(base, path, data)
+                self._base = base
+                return out
+            except RuntimeError as exc:
+                log.info("巨潮 %s 经 %s 请求失败，尝试下一协议：%s", path, base, exc)
+                last_exc = exc
+        assert last_exc is not None
+        raise last_exc
+
+    def _post_once(self, base: str, path: str, data: dict) -> Any:
+        url = base + path
         last_exc: Exception | None = None
         for attempt in range(self.retries + 1):
             if attempt:
