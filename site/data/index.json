@@ -1,6 +1,15 @@
 {
  "days": [
   {
+   "date": "2026-11-04",
+   "m_state": "DEFENSE",
+   "buy": 0,
+   "candidates": 0,
+   "mainline": [
+    "银行"
+   ]
+  },
+  {
    "date": "2026-11-03",
    "m_state": "DEFENSE",
    "buy": 0,
@@ -826,5 +835,5 @@
    ]
   }
  ],
- "updated": "2026-11-03 18:45:44"
+ "updated": "2026-11-04 18:48:40"
 }
